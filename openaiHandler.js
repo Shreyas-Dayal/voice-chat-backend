@@ -1,23 +1,40 @@
 // backend/openaiHandler.js
 const WebSocket = require('ws');
 const { OPENAI_CONFIG, OPENAI_API_KEY } = require('./config');
+const fs = require('fs'); // <-- Import File System module
+const path = require('path'); // <-- Import Path module
 
-// Simple in-memory log (replace with proper logging/DB if needed)
+// Create a directory for saving audio files if it doesn't exist
+const audioSaveDir = path.join(__dirname, 'openai_audio_output');
+if (!fs.existsSync(audioSaveDir)){
+    try {
+        fs.mkdirSync(audioSaveDir);
+        console.log(`[Server] Created directory for saving audio: ${audioSaveDir}`);
+    } catch (mkdirError) {
+         console.error(`[Server] Failed to create directory ${audioSaveDir}:`, mkdirError);
+         // Handle error appropriately, maybe exit or just warn
+    }
+}
+
+// Simple in-memory log
 const conversationLog = [];
+// Keep track of audio chunks per response on backend
+let currentResponseAudioChunks = []; // No type annotation
+let currentResponseId = null; // No type annotation
 
 /**
  * Handles a new WebSocket client connection, bridging it to the OpenAI Realtime API.
  * @param {WebSocket} wsClient The WebSocket connection from the frontend client.
  * @param {string} clientIp The IP address of the client for logging.
  */
-function handleNewClientConnection(wsClient, clientIp) {
+function handleNewClientConnection(wsClient, clientIp) { // No type annotations
     console.log(`[Handler:${clientIp}] New client connected. Initiating OpenAI connection...`);
 
-    let wsOpenAI = null;
+    let wsOpenAI = null; // No type annotation
     let clientClosed = false;
     let openAIConnected = false;
-    let openAISessionId = null;
-    let turnInProgress = false; // Track if we are waiting for OpenAI response
+    let openAISessionId = null; // No type annotation
+    let turnInProgress = false;
 
     conversationLog.push({ timestamp: Date.now(), type: 'connect', ip: clientIp });
 
@@ -36,14 +53,14 @@ function handleNewClientConnection(wsClient, clientIp) {
     }
 
     // --- Utility Functions ---
-    function safeCloseClient(client, code, reason) { /* ... (no changes needed) ... */
+    function safeCloseClient(client, code, reason) { // No type annotations
         if (client && client.readyState === WebSocket.OPEN) {
             console.log(`[Handler:${clientIp}] Closing client connection: ${code} - ${reason}`);
             client.close(code, reason);
         }
         clientClosed = true;
     }
-    function safeCloseOpenAI(openaiWs, code, reason) { /* ... (no changes needed) ... */
+    function safeCloseOpenAI(openaiWs, code, reason) { // No type annotations
         if (openaiWs && (openaiWs.readyState === WebSocket.OPEN || openaiWs.readyState === WebSocket.CONNECTING)) {
              console.log(`[Handler:${clientIp}] Closing OpenAI connection: ${code} - ${reason}`);
             openaiWs.close(code, reason);
@@ -54,7 +71,7 @@ function handleNewClientConnection(wsClient, clientIp) {
 
     // --- Handle OpenAI WebSocket Events ---
     wsOpenAI.on('open', () => {
-        if (clientClosed) { /* ... (no changes needed) ... */
+        if (clientClosed) {
             console.log(`[Handler:${clientIp}] Client disconnected before OpenAI connection opened. Closing OpenAI.`);
             safeCloseOpenAI(wsOpenAI, 1000, "Client disconnected during OpenAI connect");
             return;
@@ -67,15 +84,12 @@ function handleNewClientConnection(wsClient, clientIp) {
             type: "session.update",
             session: {
                 instructions: "You are a helpful voice assistant. Respond ONLY in English.",
-                output_audio_format: "pcm16", // Required based on errors
-                input_audio_format: "pcm16",  // Required based on errors
+                output_audio_format: "pcm16",
+                input_audio_format: "pcm16",
                 turn_detection: {
                     type: "server_vad"
-                    // create_response: true, // Default is true, no need to explicitly set
-                    // interrupt_response: true // Default is true
                 },
-                // --- *** CHANGE VOICE *** ---
-                voice: "shimmer", // Or nova
+                 voice: "shimmer", // Still trying shimmer
             },
             event_id: `session_config_${Date.now()}`
         };
@@ -83,25 +97,26 @@ function handleNewClientConnection(wsClient, clientIp) {
         try {
              if (wsOpenAI && wsOpenAI.readyState === WebSocket.OPEN) {
                 wsOpenAI.send(JSON.stringify(sessionUpdateEvent));
-                console.log(`[Handler:${clientIp}] Sent session configuration to OpenAI (pcm16, server_vad auto-response).`);
+                console.log(`[Handler:${clientIp}] Sent session configuration to OpenAI (pcm16, server_vad auto-response, English only, shimmer voice).`);
              }
-        } catch(e) { /* ... (no changes needed) ... */
+        } catch(e) {
             console.error(`[Handler:${clientIp}] Error sending session config:`, e);
             safeCloseClient(wsClient, 1011, 'Failed to configure OpenAI session');
             safeCloseOpenAI(wsOpenAI, 1011, 'Failed to send session config');
         }
     });
 
-    wsOpenAI.on('message', (messageBuffer) => {
+    wsOpenAI.on('message', (messageBuffer) => { // No type annotation
         if (clientClosed || !openAIConnected) return;
         try {
-            const messageString = messageBuffer.toString();
+            // Assuming message is JSON, handle potential non-JSON later
+            const messageString = messageBuffer.toString('utf8');
             const data = JSON.parse(messageString);
             // console.log(`[Handler:${clientIp}] OpenAI RAW Message:`, JSON.stringify(data, null, 2));
 
             switch (data.type) {
                 // -- Session Events --
-                case 'session.created': /* ... (no changes needed) ... */
+                case 'session.created':
                     openAISessionId = data.session?.id;
                     console.log(`[Handler:${clientIp}] OpenAI session created: ${openAISessionId}`);
                     conversationLog.push({ timestamp: Date.now(), type: 'session_created', sessionId: openAISessionId });
@@ -109,10 +124,10 @@ function handleNewClientConnection(wsClient, clientIp) {
                         wsClient.send(JSON.stringify({ type: 'event', name: 'AIConnected', sessionId: openAISessionId }));
                     }
                     break;
-                case 'session.updated': /* ... (no changes needed) ... */
+                case 'session.updated':
                     console.log(`[Handler:${clientIp}] OpenAI session updated.`, data.session);
                     break;
-                case 'session.closed': /* ... (no changes needed) ... */
+                case 'session.closed':
                     console.log(`[Handler:${clientIp}] OpenAI session closed by server.`);
                     conversationLog.push({ timestamp: Date.now(), type: 'openai_closed_by_server' });
                     safeCloseClient(wsClient, 1000, 'OpenAI session closed');
@@ -120,9 +135,13 @@ function handleNewClientConnection(wsClient, clientIp) {
                     break;
 
                 // -- Response Lifecycle --
-                case 'response.created': /* ... (no changes needed) ... */
+                case 'response.created':
                     console.log(`[Handler:${clientIp}] OpenAI response generation started. Response ID: ${data.response?.id}`);
                     turnInProgress = true;
+                    // --- RESET backend audio buffer for new response ---
+                    currentResponseId = data.response?.id || `resp_${Date.now()}`;
+                    currentResponseAudioChunks = [];
+                    // --- END RESET ---
                     if (wsClient.readyState === WebSocket.OPEN) {
                         wsClient.send(JSON.stringify({ type: 'event', name: 'AIResponseStart' }));
                     }
@@ -133,14 +152,24 @@ function handleNewClientConnection(wsClient, clientIp) {
                     if (data.delta) {
                         const audioBuffer = Buffer.from(data.delta, 'base64');
                         console.log(`[Handler:${clientIp}] Received OpenAI audio chunk (PCM16): ${audioBuffer.length} bytes`);
+
+                        // --- STORE chunk on backend ---
+                        if (currentResponseId) {
+                             currentResponseAudioChunks.push(audioBuffer);
+                        } else {
+                             console.warn(`[Handler:${clientIp}] Received audio delta but no current response ID to associate it with.`);
+                        }
+                        // --- END STORE ---
+
+                        // Forward to client
                         if (wsClient.readyState === WebSocket.OPEN) {
-                            wsClient.send(audioBuffer); // Send raw PCM16 Buffer
+                            wsClient.send(audioBuffer);
                         }
                     }
                     break;
 
                  // --- HANDLE TEXT DELTA ---
-                 case 'response.text.delta': /* ... (no changes needed) ... */
+                 case 'response.text.delta':
                     if (data.delta) {
                          if (wsClient.readyState === WebSocket.OPEN) {
                             wsClient.send(JSON.stringify({ type: 'textDelta', text: data.delta }));
@@ -150,10 +179,37 @@ function handleNewClientConnection(wsClient, clientIp) {
 
                 case 'response.audio_transcript.delta': break; // Mark as handled
 
-                // --- FINAL TEXT EXTRACTION IN response.done ---
-                case 'response.done': /* ... (no changes needed) ... */
+                // --- FINAL TEXT EXTRACTION & SAVE AUDIO ---
+                case 'response.done':
                     console.log(`[Handler:${clientIp}] OpenAI response generation finished. Status: ${data.response?.status}`);
-                    turnInProgress = false; // Allow new response trigger if needed (though VAD handles it)
+                    turnInProgress = false;
+
+                    // --- SAVE CONCATENATED AUDIO ON BACKEND ---
+                    const responseIdToSave = currentResponseId || `resp_done_${Date.now()}`;
+                    if (currentResponseAudioChunks.length > 0) {
+                        try { // Add try-catch for buffer concatenation and file write
+                            const concatenatedBackendBuffer = Buffer.concat(currentResponseAudioChunks);
+                            const filename = path.join(audioSaveDir, `${responseIdToSave}_backend.raw`);
+                            fs.writeFile(filename, concatenatedBackendBuffer, (err) => {
+                                if (err) {
+                                    console.error(`[Handler:${clientIp}] Error saving backend audio file ${filename}:`, err);
+                                } else {
+                                    console.log(`[Handler:${clientIp}] Saved backend audio to ${filename} (${concatenatedBackendBuffer.length} bytes)`);
+                                }
+                            });
+                        } catch (concatError) {
+                             console.error(`[Handler:${clientIp}] Error concatenating audio chunks for saving:`, concatError);
+                        }
+                    } else {
+                         console.log(`[Handler:${clientIp}] No audio chunks received for response ${responseIdToSave} to save.`);
+                    }
+                    // --- END SAVE ---
+
+                    // Clear backend buffer after processing
+                    currentResponseAudioChunks = [];
+                    currentResponseId = null;
+
+                    // Extract final text and send event to client
                     let finalAssistantText = '';
                     if (data.response?.output?.[0]?.type === 'message') {
                         const contentArray = data.response.output[0].content || [];
@@ -174,18 +230,17 @@ function handleNewClientConnection(wsClient, clientIp) {
                     break;
 
                 // -- Input Handling Events --
-                case 'input_audio_buffer.speech_started': /* ... (no changes needed) ... */
+                case 'input_audio_buffer.speech_started':
                     console.log(`[Handler:${clientIp}] OpenAI detected speech start.`);
                     if (wsClient.readyState === WebSocket.OPEN) {
                         wsClient.send(JSON.stringify({ type: 'event', name: 'AISpeechDetected' }));
                     }
                     break;
-                 case 'input_audio_buffer.speech_stopped': /* ... (no changes needed - REMOVED manual trigger) ... */
+                 case 'input_audio_buffer.speech_stopped':
                     console.log(`[Handler:${clientIp}] OpenAI detected speech stop.`);
                      if (wsClient.readyState === WebSocket.OPEN) {
                         wsClient.send(JSON.stringify({ type: 'event', name: 'AISpeechEnded' }));
                     }
-                    // VAD with create_response=true will trigger the response automatically
                     break;
 
                  // -- Other Handled Events --
@@ -203,7 +258,7 @@ function handleNewClientConnection(wsClient, clientIp) {
 
                  // -- Error Handling --
                  case 'error':
-                 case 'invalid_request_error': /* ... (no changes needed - keep detailed logging) ... */
+                 case 'invalid_request_error':
                     console.error(`[Handler:${clientIp}] RAW Error Data from OpenAI:`, JSON.stringify(data, null, 2));
                     let errMsg = 'Unknown OpenAI error';
                     if (typeof data.message === 'string') { errMsg = data.message; }
@@ -222,23 +277,32 @@ function handleNewClientConnection(wsClient, clientIp) {
                 default:
                     console.warn(`[Handler:${clientIp}] Received unhandled message type from OpenAI: ${data.type}`, data);
             }
-        } catch (error) { /* ... (no changes needed) ... */
-             if (messageBuffer instanceof Buffer && messageBuffer.length > 0) { console.warn(`[Handler:${clientIp}] Received non-JSON message from OpenAI (length ${messageBuffer.length}).`); }
-             else { console.error(`[Handler:${clientIp}] Error processing message from OpenAI:`, error); console.error(`[Handler:${clientIp}] Original OpenAI message content:`, messageBuffer.toString()); }
+        } catch (error) {
+             if (messageBuffer instanceof Buffer && messageBuffer.length > 0) {
+                 console.warn(`[Handler:${clientIp}] Received non-JSON message from OpenAI (length ${messageBuffer.length}). Assuming audio delta?`);
+                 const audioBuffer = messageBuffer;
+                 console.log(`[Handler:${clientIp}] Assuming non-JSON is audio chunk (PCM16): ${audioBuffer.length} bytes`);
+                  if (currentResponseId) { currentResponseAudioChunks.push(audioBuffer); }
+                  else { console.warn(`[Handler:${clientIp}] Received assumed audio delta but no current response ID.`); }
+                  if (wsClient.readyState === WebSocket.OPEN) { wsClient.send(audioBuffer); }
+             } else {
+                console.error(`[Handler:${clientIp}] Error processing message from OpenAI:`, error);
+                console.error(`[Handler:${clientIp}] Original OpenAI message content:`, messageBuffer.toString());
+            }
         }
     });
 
     // --- OpenAI Error/Close Handlers ---
-    wsOpenAI.on('error', (error) => { /* ... (no changes needed) ... */
+    wsOpenAI.on('error', (error) => {
         if (clientClosed) return;
         console.error(`[Handler:${clientIp}] OpenAI WebSocket Error:`, error);
-        conversationLog.push({ timestamp: Date.now(), type: 'openai_ws_error', message: error.message });
+        conversationLog.push({ timestamp: Date.now(), type: 'openai_ws_error', message: error.message }); // Remove type assertion
         safeCloseClient(wsClient, 1011, 'OpenAI connection error');
         safeCloseOpenAI(wsOpenAI, 1011, 'WebSocket error');
     });
-    wsOpenAI.on('close', (code, reason) => { /* ... (no changes needed) ... */
+    wsOpenAI.on('close', (code, reason) => { // Reason might be Buffer
         if (!openAIConnected && wsOpenAI === null) return;
-        const reasonString = reason ? reason.toString() : 'N/A';
+        const reasonString = reason instanceof Buffer ? reason.toString('utf8') : String(reason); // Handle buffer reason
         console.log(`[Handler:${clientIp}] OpenAI WebSocket closed: Code=${code}, Reason=${reasonString}`);
         conversationLog.push({ timestamp: Date.now(), type: 'openai_closed', code, reason: reasonString });
         safeCloseClient(wsClient, 1000, `OpenAI session ended (${code})`);
@@ -247,7 +311,7 @@ function handleNewClientConnection(wsClient, clientIp) {
     });
 
     // --- Handle Frontend Client WebSocket Events ---
-    wsClient.on('message', (message) => { /* ... (no changes needed) ... */
+    wsClient.on('message', (message) => { // No type annotation
         // console.log(`[Handler:${clientIp}] Received message from client. Type: ${typeof message}, IsBuffer: ${Buffer.isBuffer(message)}, Length: ${message?.length}`);
         if (clientClosed) return;
         if (Buffer.isBuffer(message)) { // Audio data
@@ -257,26 +321,36 @@ function handleNewClientConnection(wsClient, clientIp) {
                 try { wsOpenAI.send(JSON.stringify(appendEvent)); conversationLog.push({ timestamp: Date.now(), type: 'user_audio_chunk_sent', size: message.length }); }
                 catch (error) { console.error(`[Handler:${clientIp}] Error sending audio chunk to OpenAI:`, error); }
             } else { console.warn(`[Handler:${clientIp}] Received client audio, but OpenAI WebSocket is not ready.`); }
-        } else if (typeof message === 'string') { /* ... (no changes needed) ... */ }
-        else { console.warn(`[Handler:${clientIp}] Received unexpected message type from client:`, typeof message); }
+        } else if (typeof message === 'string') { // Control messages (if any)
+            try {
+                const controlMsg = JSON.parse(message.toString());
+                 console.log(`[Handler:${clientIp}] Received control message from client:`, controlMsg);
+                 // Handle custom control messages if needed
+            } catch(e) {
+                console.warn(`[Handler:${clientIp}] Received non-JSON string from client:`, message.toString());
+            }
+        } else {
+            console.warn(`[Handler:${clientIp}] Received unexpected message type from client:`, typeof message);
+        }
     });
-    wsClient.on('close', (code, reason) => { /* ... (no changes needed) ... */
+    wsClient.on('close', (code, reason) => { // Reason might be buffer
         if (clientClosed) return;
-        const reasonString = reason ? reason.toString() : 'N/A';
+        const reasonString = reason instanceof Buffer ? reason.toString('utf8') : String(reason); // Handle buffer reason
         console.log(`[Handler:${clientIp}] Frontend client disconnected: Code=${code}, Reason=${reasonString}`);
         conversationLog.push({ timestamp: Date.now(), type: 'client_disconnected', code, reason: reasonString });
         clientClosed = true;
         safeCloseOpenAI(wsOpenAI, 1000, 'Client disconnected');
     });
-    wsClient.on('error', (error) => { /* ... (no changes needed) ... */
+    wsClient.on('error', (error) => {
         if (clientClosed) return;
         console.error(`[Handler:${clientIp}] Frontend client WebSocket Error:`, error);
-        conversationLog.push({ timestamp: Date.now(), type: 'client_ws_error', message: error.message });
+        conversationLog.push({ timestamp: Date.now(), type: 'client_ws_error', message: error.message }); // Remove type assertion
         clientClosed = true;
         safeCloseOpenAI(wsOpenAI, 1011, 'Client connection error');
     });
 }
 
+// Export the handler function
 module.exports = {
     handleNewClientConnection,
 };
