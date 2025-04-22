@@ -66,6 +66,18 @@ type LogEntry = {
     [key: string]: any; // Allow flexible properties
 };
 
+// Create a directory for saving text files if it doesn't exist
+const transcriptsDir = path.join(__dirname, '..', 'transcripts');
+if (!fs.existsSync(transcriptsDir)) {
+    try {
+        fs.mkdirSync(transcriptsDir, { recursive: true });
+        console.log(`[Server] Created directory for saving transcripts: ${transcriptsDir}`);
+    } catch (mkdirError) {
+        console.error(`[Server] Failed to create directory ${transcriptsDir}:`, mkdirError);
+    }
+}
+
+
 // Create a directory for saving audio files if it doesn't exist
 const audioSaveDir = path.join(__dirname, '..', 'openai_audio_output');
 if (!fs.existsSync(audioSaveDir)){
@@ -261,10 +273,10 @@ function handleNewClientConnection(wsClient: WebSocket, clientIp: string | undef
                                 }
                             });
                         } catch (concatError: any) {
-                             console.error(`${logPrefix} Error concatenating audio chunks for saving:`, concatError);
+                            console.error(`${logPrefix} Error concatenating audio chunks for saving:`, concatError);
                         }
                     } else {
-                         console.log(`${logPrefix} No audio chunks received for response ${responseIdToSave} to save.`);
+                        console.log(`${logPrefix} No audio chunks received for response ${responseIdToSave} to save.`);
                     }
 
                     currentResponseAudioChunks = [];
@@ -276,7 +288,7 @@ function handleNewClientConnection(wsClient: WebSocket, clientIp: string | undef
                     if (outputMessage?.content) {
                         const textPart = outputMessage.content.find((part: ContentPart) => part.type === 'output_text');
                         if (textPart?.text) {
-                             finalAssistantText = textPart.text;
+                            finalAssistantText = textPart.text;
                         } else {
                             const audioPart = outputMessage.content.find((part: ContentPart) => part.type === 'audio' && part.transcript);
                             if (audioPart?.transcript) {
@@ -286,14 +298,28 @@ function handleNewClientConnection(wsClient: WebSocket, clientIp: string | undef
                     }
 
                     if (finalAssistantText) {
-                         console.log(`${logPrefix} Extracted Final Assistant Text: ${finalAssistantText}`);
-                         conversationLog.push({ timestamp: Date.now(), type: 'assistant_text', text: finalAssistantText });
+                        console.log(`${logPrefix} Extracted Final Assistant Text: ${finalAssistantText}`);
+                        conversationLog.push({ timestamp: Date.now(), type: 'assistant_text', text: finalAssistantText });
+
+                        // Create a timestamp for the filename
+                        const now = new Date();
+                        const timestamp = now.toISOString().replace(/:/g, '-').replace(/\..+/, ''); // Format: YYYY-MM-DDThh-mm-ss
+
+                        // Save the transcript (to a file or logging service)
+                        const transcriptFilePath = path.join(__dirname, '..', './openai_text_output', `${timestamp}_${responseIdToSave}_transcript.txt`);
+                        fs.writeFile(transcriptFilePath, finalAssistantText, (err: NodeJS.ErrnoException | null) => {
+                            if (err) {
+                                console.error(`${logPrefix} Error saving transcript file ${transcriptFilePath}:`, err);
+                            } else {
+                                console.log(`${logPrefix} Saved transcript to ${transcriptFilePath}`);
+                            }
+                        });
                     } else {
-                         console.warn(`${logPrefix} Could not extract final assistant text from response.done event.`);
-                         conversationLog.push({ timestamp: Date.now(), type: 'assistant_text', text: '[No text extracted]' });
+                        console.warn(`${logPrefix} Could not extract final assistant text from response.done event.`);
+                        conversationLog.push({ timestamp: Date.now(), type: 'assistant_text', text: '[No text extracted]' });
                     }
                     if (wsClient.readyState === WebSocket.OPEN) {
-                         wsClient.send(JSON.stringify({ type: 'event', name: 'AIResponseEnd', finalText: finalAssistantText }));
+                        wsClient.send(JSON.stringify({ type: 'event', name: 'AIResponseEnd', finalText: finalAssistantText }));
                     }
                     break;
                 }
