@@ -67,7 +67,7 @@ type LogEntry = {
 };
 
 // Create a directory for saving text files if it doesn't exist
-const transcriptsDir = path.join(__dirname, '..', 'transcripts');
+const transcriptsDir = path.join(__dirname, '..', './openai_text_output');
 if (!fs.existsSync(transcriptsDir)) {
     try {
         fs.mkdirSync(transcriptsDir, { recursive: true });
